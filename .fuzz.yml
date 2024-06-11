@@ -1,0 +1,56 @@
+analyze:
+  # We need to know where the dependencies live
+  # remappings:
+  #   - "@openzeppelin=./node_modules/@openzeppelin"
+  #   - "@ozUpgradesV3=OpenZeppelin/openzeppelin-contracts-upgradeable@3.3.0"
+
+  # Sometimes you want to enforce a specific solidity version
+  solc-version: '0.8.24'
+
+fuzz:
+  ide: hardhat
+
+  key: Null
+
+  # Change the chain ID that is used by the fuzzer. Default is 0x1 (1)
+  chain_id: '0x3039' # (12345)
+  # Enable/Disable "cheat codes" in fuzzer (as introduced by dapptools)
+  enable_cheat_codes: false
+
+  quick_check: False
+
+  smart_mode: False
+
+  # Tell the CLI where to find the compiled contracts and compilation artifacts
+
+  # Can be set manually but is automatic when smart mode is enabled.
+  build_directory: artifacts
+
+  # Tell the CLI where to find the contracts source
+
+  # Can be set manually but is automatic when smart mode is enabled.
+  sources_directory: contracts/
+
+  # The following address is going to be the main target for the fuzzing campaign
+  deployed_contract_address: '0x610178dA211FEF7D417bC0e6FeD39F05609AD788'
+
+  # This parameter tells the fuzzer to also fuzz these contracts
+  # additional_contracts_addresses:
+
+  # Number of CPU cores to run fuzzing
+  # number_of_cores: 4
+
+  # When the campaign is created it'll get a name <prefix>_<random_characters>
+  campaign_name_prefix: DelegatedClaimCampaigns
+
+  # Set a default project to which your campaigns will be attached to
+  project: 'Hedgey: DelegatedClaimCampaigns'
+
+  # Point to your ganache node which holds the seed 🌱
+  rpc_url: http://localhost:8545
+
+  # This is the contract that the campaign will show coverage for, map issues to, etc.
+  # It's a list of all the relevant contracts (don't worry about dependencies, we'll get those automatically 🙌)
+  targets:
+    # entire directory with contracts
+    - 'contracts/DelegatedClaimCampaigns.sol'
