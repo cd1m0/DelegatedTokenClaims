@@ -10,10 +10,15 @@ import './interfaces/IERC20Votes.sol';
 import '@openzeppelin/contracts/utils/ReentrancyGuard.sol';
 import '@openzeppelin/contracts/utils/cryptography/MerkleProof.sol';
 import '@openzeppelin/contracts/token/ERC721/IERC721.sol';
+import '@openzeppelin/contracts/token/ERC721/extensions/IERC721Enumerable.sol';
 import '@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol';
 import '@openzeppelin/contracts/utils/cryptography/EIP712.sol';
 import '@openzeppelin/contracts/utils/cryptography/ECDSA.sol';
 import '@openzeppelin/contracts/utils/Nonces.sol';
+
+interface IPlan is IERC721Enumerable {
+  function votingVaults(uint256 id) external view returns (address vault);
+}
 
 /// @title ClaimCampaigns - The smart contract to distribute your tokens to the community via claims
 /// @notice This tool allows token projects to safely, securely and efficiently distribute your tokens in large scale to your community, whereby they can claim them based on your criteria of wallet address and amount.
@@ -143,6 +148,10 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param id is the uuid or CID of the file that stores the merkle tree
   /// @param campaign is the struct of the campaign info, including the total amount tokens to be distributed via claims, and the root of the merkle tree
   /// @param totalClaimers is the total number of claimers that can claim from the campaign
+  /// #if_succeeds "Campaign id not used; usedIds updated." !old(usedIds[id]) && usedIds[id];
+  /// #if_succeeds "Start and end times valid." campaign.end >= block.timestamp && campaign.end > campaign.start;
+  /// #if_succeeds "Campaign token and manager non-0; Campaign amount valid and type is unlocked." campaign.token != address(0) && campaign.manager != address(0) && campaign.amount > 0 && campaign.tokenLockup == TokenLockup.Unlocked;
+  /// #if_succeeds "Campaign tokens transferred to us." let tok := old(IERC20(campaign.token)) in old(tok.balanceOf(address(this))) + campaign.amount == tok.balanceOf(address(this));
   function createUnlockedCampaign(bytes16 id, Campaign memory campaign, uint256 totalClaimers) external nonReentrant {
     require(!usedIds[id], 'in use');
     require(id != bytes16(0), '0_id');
@@ -168,6 +177,13 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param campaign is the struct of the campaign info, including the total amount tokens to be distributed via claims, and the root of the merkle tree, plus the lockup type of either 1 (lockup) or 2 (vesting)
   /// @param claimLockup is the struct that defines the characteristics of the lockup for each token claimed.
   /// @param vestingAdmin is the address of the vesting admin, which is used for the vesting plans, and is typically the msg.sender
+  /// #if_succeeds "Campaign id not used; usedIds updated." !old(usedIds[id]) && usedIds[id];
+  /// #if_succeeds "Start and end times valid." campaign.end >= block.timestamp && campaign.end > campaign.start;
+  /// #if_succeeds "Campaign token and manager non-0; Campaign amount valid and type is unlocked." campaign.token != address(0) && campaign.manager != address(0) && campaign.amount > 0 && campaign.tokenLockup != TokenLockup.Unlocked;
+  /// #if_succeeds "Token locker is approved" tokenLockers[claimLockup.tokenLocker] && claimLockup.tokenLocker != address(0);
+  /// #if_succeeds "If vesting campaign, vestingAdmin is provided." campaign.tokenLockup == TokenLockup.Vesting ==> vestingAdmin != address(0);
+  /// #if_succeeds "Campaign tokens transferred to us." let tok := old(IERC20(campaign.token)) in old(tok.balanceOf(address(this))) + campaign.amount == tok.balanceOf(address(this));
+  /// #if_succeeds "No allowance given to tokenLocker." let tok := IERC20(campaign.token) in let locker := claimLockup.tokenLocker in tok.allowance(address(this), locker) == 0;
   function createLockedCampaign(
     bytes16 id,
     Campaign memory campaign,
@@ -204,6 +220,10 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
 
   /// @notice this function allows the campaign manager to cancel an ongoing campaign at anytime. Cancelling a campaign will return any unclaimed tokens, and then prevent anyone from claiming additional tokens
   /// @param campaignIds is the id of the campaign to be cancelled
+  /// #if_succeeds "Only the manager can cancel a campaign." old(forall (uint i in campaignIds) campaigns[campaignIds[i]].manager == msg.sender);
+  /// #if_succeeds "For each campaign we didnt give an allowance to the token locker." old(forall (uint i in campaignIds) let id := campaignIds[i] in let c := campaigns[id] in IERC20(c.token).allowance(address(this), claimLockups[id].tokenLocker) == 0);
+  /// #try campaignIds.length == 1 && campaignIds[0] == bytes16(uint128(0x00000000000000000000000000000001));`
+  /// (checked by contract if_succeeds) afterwards the amounts of tokens for each token type matches the sum of amounts across all campaigns for this token type
   function cancelCampaigns(bytes16[] memory campaignIds) external nonReentrant {
     for (uint256 i = 0; i < campaignIds.length; i++) {
       Campaign memory campaign = campaigns[campaignIds[i]];
@@ -224,6 +244,18 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param proof is the proof of the leaf in the merkle tree
   /// @param claimAmount is the amount of tokens to claim
   /// @dev the function checks that the claimer has not already claimed, and that the campaign is not delegating, and then calls the internal claim function
+  /// #if_succeeds "Can only claim in time window"
+  ///     let c := old(campaigns[campaignId]) in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  /// #if_succeeds "Can't double claim." old(!claimed[campaignId][msg.sender]) && claimed[campaignId][msg.sender];
+  /// #if_succeeds "Not a delegated camapign." old(!campaigns[campaignId].delegating);
+  /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(tok.balanceOf(address(this))) - claimAmount == tok.balanceOf(address(this));
+  /// #if_succeeds "Sender gets the tokens on unlocked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(c.tokenLockup == TokenLockup.Unlocked) ==> old(tok.balanceOf(msg.sender)) + claimAmount == tok.balanceOf(msg.sender);
+  /// #if_succeeds "Token locker gets the tokens on locked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in let locker := old(claimLockups[campaignId].tokenLocker) in
+  ///   old(c.tokenLockup != TokenLockup.Unlocked) ==> old(tok.balanceOf(locker)) + claimAmount == tok.balanceOf(locker);
+  /// #if_succeeds "Token locker doesnt have allowance after claim." let c := old(campaigns[campaignId]) in let locker := old(claimLockups[campaignId].tokenLocker) in let tok := old(IERC20(c.token)) in tok.allowance(address(this), locker) == 0;
   function claim(bytes16 campaignId, bytes32[] calldata proof, uint256 claimAmount) external nonReentrant {
     require(!claimed[campaignId][msg.sender], 'already claimed');
     require(!campaigns[campaignId].delegating, 'must delegate');
@@ -238,6 +270,11 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param campaignIds is the id of the campaign to claim from
   /// @param proofs is the proof of the leaf in the merkle tree
   /// @param claimAmounts is the amount of tokens to claim
+  /// #if_succeeds "Can only claim in time window"
+  ///   forall(uint i in campaignIds)
+  ///     let c := campaigns[campaignIds[i]] in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  /// Additional checks on balances performed by computeExpectedTransfers/checkExpectedTransfers.
   function claimMultiple(
     bytes16[] calldata campaignIds,
     bytes32[][] calldata proofs,
@@ -263,6 +300,30 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param claimer is the address of the beneficial owner of the claim
   /// @param claimAmount is the amount of tokens to claim
   /// @param claimSignature is the signature provided by the beneficial owner (the claimer) to the user of the function to claim on their behalf
+  /// #if_succeeds "Can only claim in time window"
+  ///   let oldC := old(campaigns[campaignId]) in
+  ///     let c := campaigns[campaignId] in
+  ///       oldC.amount != c.amount ==> (c.start <= block.timestamp && block.timestamp <= c.end);
+  /// #if_succeeds "Can't double claim." old(!claimed[campaignId][claimer]) && claimed[campaignId][claimer];
+  /// #if_succeeds "Not a delegated camapign." old(!campaigns[campaignId].delegating);
+  /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(tok.balanceOf(address(this))) - claimAmount == tok.balanceOf(address(this));
+  /// #if_succeeds "Sender gets the tokens on unlocked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(c.tokenLockup == TokenLockup.Unlocked) ==> old(tok.balanceOf(claimer)) + claimAmount == tok.balanceOf(claimer);
+  /// #if_succeeds "Token locker gets the tokens on locked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in let locker := old(claimLockups[campaignId].tokenLocker) in
+  ///   old(c.tokenLockup != TokenLockup.Unlocked) ==> old(tok.balanceOf(locker)) + claimAmount == tok.balanceOf(locker);
+  /// #if_succeeds "Token locker doesnt have allowance after claim." let c := old(campaigns[campaignId]) in let locker := old(claimLockups[campaignId].tokenLocker) in let tok := old(IERC20(c.token)) in tok.allowance(address(this), locker) == 0;
+  /// #if_succeeds "Nonces increase monotonically; Nonces of claimer match signature." nonces(claimer) == old(nonces(claimer)) + 1 && nonces(claimer) == claimSignature.nonce;
+  /// #if_succeeds "Signature is correct" ECDSA.recover(
+  ///    _hashTypedDataV4(
+  ///      keccak256(
+  ///        abi.encode(CLAIM_TYPEHASH, campaignId, claimer, claimAmount, claimSignature.nonce, claimSignature.expiry)
+  ///      )
+  ///    ),
+  ///    claimSignature.v,
+  ///    claimSignature.r,
+  ///    claimSignature.s
+  ///  ) == claimer;
   function claimWithSig(
     bytes16 campaignId,
     bytes32[] calldata proof,
@@ -292,6 +353,12 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     }
   }
 
+  /// add combination of claim with sig and claim multiple
+  /// #if_succeeds "Can only claim in time window"
+  ///   forall(uint i in campaignIds)
+  ///     let c := campaigns[campaignIds[i]] in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  /// #if_succeeds "Nonces increase monotonically; Nonce of claimer matches signature" nonces(claimer) == old(nonces(claimer)) + 1 && nonces(claimer) == claimSignature.nonce;
   function claimMultipleWithSig(
     bytes16[] calldata campaignIds,
     bytes32[][] calldata proofs,
@@ -341,6 +408,25 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param delegatee is the address of the wallet to delegate the claim to
   /// @param delegationSignature is a signature required Only if the user is claiming unlocked tokens, used to call the delegateWithSig function on the ERC20Votes token contract
   /// @dev the delegation signature is not require and empty entries can be passed in if the campaign is locked or vesting
+  /// #if_succeeds "Can only claim in time window"
+  ///     let c := old(campaigns[campaignId]) in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  /// #if_succeeds "Can't double claim." old(!claimed[campaignId][msg.sender]) && claimed[campaignId][msg.sender];
+  /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(tok.balanceOf(address(this))) - claimAmount == tok.balanceOf(address(this));
+  /// #if_succeeds "Sender gets the tokens on unlocked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(c.tokenLockup == TokenLockup.Unlocked) ==> old(tok.balanceOf(msg.sender)) + claimAmount == tok.balanceOf(msg.sender);
+  /// #if_succeeds "Token locker gets the tokens on locked campaigns"
+  ///   let c := old(campaigns[campaignId]) in
+  ///     let tok := old(IERC20(c.token)) in
+  ///       let tokenLocker := old(IPlan(claimLockups[campaignId].tokenLocker)) in
+  ///       let tokenId := old(tokenLocker.tokenOfOwnerByIndex(msg.sender, tokenLocker.balanceOf(msg.sender) - 1)) in
+  ///       let vault := old(tokenLocker.votingVaults(tokenId)) in
+  ///         let oldVaultBalance := old(tok.balanceOf(vault)) in
+  ///           let newVaultBalance := tok.balanceOf(vault) in
+  ///             old(c.tokenLockup != TokenLockup.Unlocked) ==>  oldVaultBalance + claimAmount == newVaultBalance;
+  /// #if_succeeds "Token locker doesnt have allowance after claim." let c := old(campaigns[campaignId]) in let locker := old(claimLockups[campaignId].tokenLocker) in let tok := old(IERC20(c.token)) in tok.allowance(address(this), locker) == 0;
+  /// #if_succeeds "Delegatee votes increase by claimAmount." let c := old(campaigns[campaignId]) in let tok := old(IERC20Votes(c.token)) in let oldVotes := old(tok.getVotes(delegatee)) in tok.getVotes(delegatee) - oldVotes == claimAmount;
   function claimAndDelegate(
     bytes16 campaignId,
     bytes32[] memory proof,
@@ -377,6 +463,18 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param delegatee is the address of the wallet to delegate the claim to
   /// @param delegationSignature is a signature required Only if the user is claiming unlocked tokens, used to call the delegateWithSig function on the ERC20Votes token contract
   /// @dev the delegation signature is not require and empty entries can be passed in if the campaign is locked or vesting
+  /// #if_succeeds "Can only claim in time window"
+  ///     let c := old(campaigns[campaignId]) in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  /// #if_succeeds "Can't double claim." old(!claimed[campaignId][msg.sender]) && claimed[campaignId][msg.sender];
+  /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(tok.balanceOf(address(this))) - claimAmount == tok.balanceOf(address(this));
+  /// #if_succeeds "Sender gets the tokens on unlocked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(c.tokenLockup == TokenLockup.Unlocked) ==> old(tok.balanceOf(msg.sender)) + claimAmount == tok.balanceOf(msg.sender);
+  /// #if_succeeds "Token locker gets the tokens on locked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in let locker := old(claimLockups[campaignId].tokenLocker) in
+  ///   old(c.tokenLockup != TokenLockup.Unlocked) ==> old(tok.balanceOf(locker)) + claimAmount == tok.balanceOf(locker);
+  /// #if_succeeds "Token locker doesnt have allowance after claim." let c := old(campaigns[campaignId]) in let locker := old(claimLockups[campaignId].tokenLocker) in let tok := old(IERC20(c.token)) in tok.allowance(address(this), locker) == 0;
+  /// #if_succeeds "Delegatee votes increase by claimAmount." let c := old(campaigns[campaignId]) in let tok := old(IERC20Votes(c.token)) in let oldVotes := old(tok.getVotes(delegatee)) in tok.getVotes(delegatee) - oldVotes == claimAmount;
   function claimAndDelegateWithSig(
     bytes16 campaignId,
     bytes32[] memory proof,
