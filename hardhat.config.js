@@ -25,6 +25,9 @@ module.exports = {
       url: "http://localhost:8545",
       allowUnlimitedContractSize: true
     },
+    hardhat: {
+      allowUnlimitedContractSize: true
+    },
     sepolia: {
       url: process.env.SEPOLIA_URL,
       accounts: [process.env.TEST_DEPLOYER_PRIVATE_KEY],
