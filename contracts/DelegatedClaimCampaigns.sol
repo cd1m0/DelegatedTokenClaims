@@ -20,10 +20,44 @@ interface IPlan is IERC721Enumerable {
   function votingVaults(uint256 id) external view returns (address vault);
 }
 
+library SetList {
+  struct SL {
+    bytes16[] lst;
+    mapping(bytes16 => uint) idxs;
+  }
+
+  function add(SL storage s, bytes16 id) internal {
+    if (s.idxs[id] != 0) {
+      return;
+    }
+
+    if (s.lst.length == 0) {
+      s.lst.push();
+    }
+
+    s.idxs[id] = s.lst.length;
+    s.lst.push(id);
+  }
+
+  function remove(SL storage s, bytes16 id) internal {
+    if (s.idxs[id] == 0) {
+      return;
+    }
+
+    uint256 idx = s.idxs[id];
+    bytes16 last = s.lst[s.lst.length - 1];
+
+    s.lst[idx] = last;
+    s.idxs[last] = idx;
+    s.lst.pop();
+  }
+}
+
 /// @title ClaimCampaigns - The smart contract to distribute your tokens to the community via claims
 /// @notice This tool allows token projects to safely, securely and efficiently distribute your tokens in large scale to your community, whereby they can claim them based on your criteria of wallet address and amount.
-
+/// #if_succeeds "Manual Invariants" checkManualInvs();
 contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonces {
+  using SetList for SetList.SL;
   /// @dev this claimhash is used for EIP712 signing of the claim functions
   bytes32 private constant CLAIM_TYPEHASH =
     keccak256('Claim(bytes16 campaignId,address claimer,uint256 claimAmount,uint256 nonce,uint256 expiry)');
@@ -39,6 +73,51 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     );
 
   mapping(address => bool) public tokenLockers;
+
+  SetList.SL campaignGIds;
+  SetList.SL claimLockupsIds;
+  function checkManualInvs() public view returns (bool) {
+    // For all claims the tokenLocker is approved
+    for (uint i = 1; i < claimLockupsIds.lst.length; i++) {
+      ClaimLockup storage cl = claimLockups[claimLockupsIds.lst[i]];
+      if (!tokenLockers[cl.tokenLocker]) {
+        return false;
+      }
+    }
+
+    // For all tokens T in campaigns, the sum of amounts across all campaigns for T equals the balance of this contract
+    for (uint i = 1; i < campaignGIds.lst.length; i++) {
+      Campaign storage c = campaigns[campaignGIds.lst[i]];
+      IERC20 t = IERC20(c.token);
+      uint totalAmount = 0;
+      for (uint j = 1; j < campaignGIds.lst.length; j++) {
+        Campaign storage c1 = campaigns[campaignGIds.lst[j]];
+        if (c1.token != address(t)) {
+          continue;
+        }
+
+        totalAmount += c1.amount;
+      }
+
+      if (t.balanceOf(address(this)) != totalAmount) {
+        return false;
+      }
+    }
+
+    // For all locked campaigns the allowance of the token locker is 0
+    for (uint i = 1; i < claimLockupsIds.lst.length; i++) {
+      ClaimLockup storage cl = claimLockups[claimLockupsIds.lst[i]];
+      Campaign storage c = campaigns[claimLockupsIds.lst[i]];
+
+      IERC20 t = IERC20(c.token);
+      if (t.allowance(address(this), cl.tokenLocker) != 0) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
 
   /// @dev an enum defining the different types of claims to be made
   /// @param Unlocked means that tokens claimed are liquid and not locked at all
@@ -166,6 +245,7 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     }
     TransferHelper.transferTokens(campaign.token, msg.sender, address(this), campaign.amount);
     campaigns[id] = campaign;
+    campaignGIds.add(id);
     _campaignBlockNumber[id] = block.number;
     emit CampaignStarted(id, campaign, totalClaimers);
   }
@@ -213,6 +293,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     TransferHelper.transferTokens(campaign.token, msg.sender, address(this), campaign.amount);
     claimLockups[id] = claimLockup;
     campaigns[id] = campaign;
+    campaignGIds.add(id);
+    claimLockupsIds.add(id);
     _campaignBlockNumber[id] = block.number;
     emit ClaimLockupCreated(id, claimLockup);
     emit CampaignStarted(id, campaign, totalClaimers);
@@ -232,6 +314,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
       require((IERC20(campaign.token).allowance(address(this), claimLockups[campaignIds[i]].tokenLocker)) == 0, 'allowance error');
       delete campaigns[campaignIds[i]];
       delete claimLockups[campaignIds[i]];
+      campaignGIds.remove(campaignIds[i]);
+      claimLockupsIds.remove(campaignIds[i]);
       TransferHelper.withdrawTokens(campaign.token, msg.sender, campaign.amount);
       emit CampaignCancelled(campaignIds[i]);
     }
@@ -266,6 +350,96 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     }
   }
 
+  struct TransferDesc {
+    IERC20 token;
+    uint lost;
+    uint oldBalance;
+    address[] recipients;
+    uint[] amounts;
+    uint[] oldRecepientBalances;
+  }
+
+  TransferDesc[] tempDescs;
+
+  function computeExpectedTransfers(
+    bytes16[] calldata campaignIds,
+    uint256[] calldata claimAmounts,
+    address claimer
+  ) internal returns (TransferDesc[] memory) {
+    delete tempDescs;
+
+    for (uint i = 0; i < campaignIds.length; i++) {
+      bytes16 b = campaignIds[i];
+      Campaign storage c = campaigns[b];
+
+      uint j = 0;
+      for (; j < tempDescs.length; j++) {
+        if (address(tempDescs[j].token) == c.token) {
+          break;
+        }
+      }
+
+      if (j == tempDescs.length) {
+        tempDescs.push();
+        tempDescs[j].token = IERC20(c.token);
+        tempDescs[j].lost = 0;
+        delete tempDescs[j].recipients;
+        delete tempDescs[j].amounts;
+        delete tempDescs[j].oldRecepientBalances;
+      }
+
+      tempDescs[j].lost += claimAmounts[i];
+      address recepient = c.tokenLockup == TokenLockup.Unlocked ? claimer : claimLockups[b].tokenLocker;
+      uint k = 0;
+      for (k = 0; k < tempDescs[j].recipients.length; k++) {
+        if (tempDescs[j].recipients[k] == recepient) {
+          break;
+        }
+      }
+
+      if (k == tempDescs[j].recipients.length) {
+        tempDescs[j].recipients.push(recepient);
+        tempDescs[j].amounts.push(claimAmounts[i]);
+      } else {
+        tempDescs[j].amounts[k] += claimAmounts[i];
+      }
+    }
+
+    for (uint i = 0; i < tempDescs.length; i++) {
+      TransferDesc storage t = tempDescs[i];
+      IERC20 tok = t.token;
+      t.oldBalance = tok.balanceOf(address(this));
+      for (uint j = 0; j < t.recipients.length; j++) {
+        t.oldRecepientBalances.push(tok.balanceOf(t.recipients[j]));
+      }
+    }
+
+    return tempDescs;
+  }
+
+  function checkExpectedTransfers(TransferDesc[] memory tds) internal returns (bool) {
+    for (uint i = 0; i < tds.length; i++) {
+      TransferDesc storage t = tempDescs[i];
+      IERC20 tok = t.token;
+
+      uint curBal = tok.balanceOf(address(this));
+
+      if (curBal + t.lost != t.oldBalance) {
+        return false;
+      }
+
+      for (uint j = 0; j < t.recipients.length; j++) {
+        uint curRecBal = tok.balanceOf(t.recipients[j]);
+        if (curRecBal != t.oldRecepientBalances[j] + t.amounts[j]) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+
   /// @notice function to claim tokens from multiple campaigns assuming none of them require delegation
   /// @param campaignIds is the id of the campaign to claim from
   /// @param proofs is the proof of the leaf in the merkle tree
@@ -287,6 +461,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   ) external nonReentrant {
     require(campaignIds.length == proofs.length, 'length mismatch');
     require(campaignIds.length == claimAmounts.length, 'length mismatch');
+
+    TransferDesc[] memory tds = computeExpectedTransfers(campaignIds, claimAmounts, msg.sender);
     uint256 claimNum = campaignIds.length;
     for (uint256 i; i < claimNum; ++i) {
       require(!claimed[campaignIds[i]][msg.sender], 'already claimed');
@@ -296,6 +472,10 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
       } else {
         _claimLockedTokens(campaignIds[i], proofs[i], msg.sender, claimAmounts[i]);
       }
+    }
+
+    if (!checkExpectedTransfers(tds)) {
+      revert('Failed expected transfer check in claimMultiple');
     }
   }
 
@@ -409,6 +589,7 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     require(signer == claimer, 'invalid claim signature');
     _useCheckedNonce(claimer, claimSignature.nonce);
     uint256 claimNum = campaignIds.length;
+    TransferDesc[] memory tds = computeExpectedTransfers(campaignIds, claimAmounts, claimer);
     for (uint256 i; i < claimNum; ++i) {
       require(!claimed[campaignIds[i]][claimer], 'already claimed');
       require(!campaigns[campaignIds[i]].delegating, 'must delegate');
@@ -417,6 +598,9 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
       } else {
         _claimLockedTokens(campaignIds[i], proofs[i], claimer, claimAmounts[i]);
       }
+    }
+    if (!checkExpectedTransfers(tds)) {
+      revert('Failed expected transfer check in claimMultiple');
     }
   }
 
@@ -580,6 +764,7 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     campaigns[campaignId].amount -= claimAmount;
     if (campaigns[campaignId].amount == 0) {
       delete campaigns[campaignId];
+      campaignGIds.remove(campaignId);
     }
     TransferHelper.withdrawTokens(campaign.token, claimer, claimAmount);
     emit UnlockedTokensClaimed(campaignId, claimer, claimAmount, campaigns[campaignId].amount);
@@ -650,6 +835,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     if (campaigns[campaignId].amount == 0) {
       delete campaigns[campaignId];
       delete claimLockups[campaignId];
+      campaignGIds.remove(campaignId);
+      claimLockupsIds.remove(campaignId);
     }
     uint256 rate;
     if (claimAmount % c.periods == 0) {
@@ -722,6 +909,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     if (campaigns[campaignId].amount == 0) {
       delete campaigns[campaignId];
       delete claimLockups[campaignId];
+      campaignGIds.remove(campaignId);
+      claimLockupsIds.remove(campaignId);
     }
     uint256 rate;
     if (claimAmount % c.periods == 0) {
