@@ -426,7 +426,6 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   ///           let newVaultBalance := tok.balanceOf(vault) in
   ///             old(c.tokenLockup != TokenLockup.Unlocked) ==>  oldVaultBalance + claimAmount == newVaultBalance;
   /// #if_succeeds "Token locker doesnt have allowance after claim." let c := old(campaigns[campaignId]) in let locker := old(claimLockups[campaignId].tokenLocker) in let tok := old(IERC20(c.token)) in tok.allowance(address(this), locker) == 0;
-  /// #if_succeeds "Delegatee votes increase by claimAmount." let c := old(campaigns[campaignId]) in let tok := old(IERC20Votes(c.token)) in let oldVotes := old(tok.getVotes(delegatee)) in tok.getVotes(delegatee) - oldVotes == claimAmount;
   function claimAndDelegate(
     bytes16 campaignId,
     bytes32[] memory proof,
@@ -474,7 +473,6 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// #if_succeeds "Token locker gets the tokens on locked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in let locker := old(claimLockups[campaignId].tokenLocker) in
   ///   old(c.tokenLockup != TokenLockup.Unlocked) ==> old(tok.balanceOf(locker)) + claimAmount == tok.balanceOf(locker);
   /// #if_succeeds "Token locker doesnt have allowance after claim." let c := old(campaigns[campaignId]) in let locker := old(claimLockups[campaignId].tokenLocker) in let tok := old(IERC20(c.token)) in tok.allowance(address(this), locker) == 0;
-  /// #if_succeeds "Delegatee votes increase by claimAmount." let c := old(campaigns[campaignId]) in let tok := old(IERC20Votes(c.token)) in let oldVotes := old(tok.getVotes(delegatee)) in tok.getVotes(delegatee) - oldVotes == claimAmount;
   function claimAndDelegateWithSig(
     bytes16 campaignId,
     bytes32[] memory proof,

@@ -7,6 +7,4 @@ interface IERC20Votes {
   function delegates(address wallet) external view returns (address delegate);
 
   function delegateBySig(address delegatee, uint256 nonce, uint256 expiry, uint8 v, bytes32 r, bytes32 s) external;
-
-  function getVotes(address wallet) external view returns (uint votes);
 }
