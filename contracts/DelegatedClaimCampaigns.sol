@@ -118,7 +118,6 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
     return true;
   }
 
-
   /// @dev an enum defining the different types of claims to be made
   /// @param Unlocked means that tokens claimed are liquid and not locked at all
   /// @param Locked means that the tokens claimed will be locked inside a TokenLockups plan
@@ -311,7 +310,10 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
       Campaign memory campaign = campaigns[campaignIds[i]];
       require(campaign.manager == msg.sender, '!manager');
       require(_campaignBlockNumber[campaignIds[i]] < block.number, 'same block');
-      require((IERC20(campaign.token).allowance(address(this), claimLockups[campaignIds[i]].tokenLocker)) == 0, 'allowance error');
+      require(
+        (IERC20(campaign.token).allowance(address(this), claimLockups[campaignIds[i]].tokenLocker)) == 0,
+        'allowance error'
+      );
       delete campaigns[campaignIds[i]];
       delete claimLockups[campaignIds[i]];
       campaignGIds.remove(campaignIds[i]);
@@ -438,7 +440,6 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
 
     return true;
   }
-
 
   /// @notice function to claim tokens from multiple campaigns assuming none of them require delegation
   /// @param campaignIds is the id of the campaign to claim from
