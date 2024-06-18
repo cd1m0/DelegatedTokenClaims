@@ -85,7 +85,7 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
       }
     }
 
-    // For all tokens T in campaigns, the sum of amounts across all campaigns for T equals the balance of this contract
+    // For all tokens T in campaigns, the sum of amounts across all campaigns for T is less than or equal to the balance of this contract
     for (uint i = 1; i < campaignGIds.lst.length; i++) {
       Campaign storage c = campaigns[campaignGIds.lst[i]];
       IERC20 t = IERC20(c.token);
@@ -99,7 +99,7 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
         totalAmount += c1.amount;
       }
 
-      if (t.balanceOf(address(this)) != totalAmount) {
+      if (t.balanceOf(address(this)) < totalAmount) {
         return false;
       }
     }
