@@ -301,9 +301,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param claimAmount is the amount of tokens to claim
   /// @param claimSignature is the signature provided by the beneficial owner (the claimer) to the user of the function to claim on their behalf
   /// #if_succeeds "Can only claim in time window"
-  ///   let oldC := old(campaigns[campaignId]) in
-  ///     let c := campaigns[campaignId] in
-  ///       oldC.amount != c.amount ==> (c.start <= block.timestamp && block.timestamp <= c.end);
+  ///     let c := old(campaigns[campaignId]) in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end;
   /// #if_succeeds "Can't double claim." old(!claimed[campaignId][claimer]) && claimed[campaignId][claimer];
   /// #if_succeeds "Not a delegated camapign." old(!campaigns[campaignId].delegating);
   /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
