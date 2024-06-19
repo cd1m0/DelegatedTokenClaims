@@ -415,7 +415,7 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   ///   old(tok.balanceOf(address(this))) - claimAmount == tok.balanceOf(address(this));
   /// #if_succeeds "Sender gets the tokens on unlocked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
   ///   old(c.tokenLockup == TokenLockup.Unlocked) ==> old(tok.balanceOf(msg.sender)) + claimAmount == tok.balanceOf(msg.sender);
-  /// #if_succeeds "Token locker gets the tokens on locked campaigns"
+  /// #if_succeeds "Voting vault gets the tokens on locked campaigns"
   ///   let c := old(campaigns[campaignId]) in
   ///     let tok := old(IERC20(c.token)) in
   ///       let tokenLocker := old(IPlan(claimLockups[campaignId].tokenLocker)) in
@@ -467,10 +467,17 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// #if_succeeds "Can't double claim." old(!claimed[campaignId][msg.sender]) && claimed[campaignId][msg.sender];
   /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
   ///   old(tok.balanceOf(address(this))) - claimAmount == tok.balanceOf(address(this));
-  /// #if_succeeds "Sender gets the tokens on unlocked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
-  ///   old(c.tokenLockup == TokenLockup.Unlocked) ==> old(tok.balanceOf(msg.sender)) + claimAmount == tok.balanceOf(msg.sender);
-  /// #if_succeeds "Token locker gets the tokens on locked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in let locker := old(claimLockups[campaignId].tokenLocker) in
-  ///   old(c.tokenLockup != TokenLockup.Unlocked) ==> old(tok.balanceOf(locker)) + claimAmount == tok.balanceOf(locker);
+  /// #if_succeeds "Claimer gets the tokens on unlocked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
+  ///   old(c.tokenLockup == TokenLockup.Unlocked) ==> old(tok.balanceOf(claimer)) + claimAmount == tok.balanceOf(claimer);
+  /// #if_succeeds "Voting vault gets the tokens on locked campaigns"
+  ///   let c := old(campaigns[campaignId]) in
+  ///     let tok := old(IERC20(c.token)) in
+  ///       let tokenLocker := old(IPlan(claimLockups[campaignId].tokenLocker)) in
+  ///       let tokenId := old(tokenLocker.tokenOfOwnerByIndex(claimer, tokenLocker.balanceOf(claimer) - 1)) in
+  ///       let vault := old(tokenLocker.votingVaults(tokenId)) in
+  ///         let oldVaultBalance := old(tok.balanceOf(vault)) in
+  ///           let newVaultBalance := tok.balanceOf(vault) in
+  ///             old(c.tokenLockup != TokenLockup.Unlocked) ==>  oldVaultBalance + claimAmount == newVaultBalance;
   /// #if_succeeds "Token locker doesnt have allowance after claim." let c := old(campaigns[campaignId]) in let locker := old(claimLockups[campaignId].tokenLocker) in let tok := old(IERC20(c.token)) in tok.allowance(address(this), locker) == 0;
   function claimAndDelegateWithSig(
     bytes16 campaignId,
