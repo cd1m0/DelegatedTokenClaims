@@ -245,8 +245,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param claimAmount is the amount of tokens to claim
   /// @dev the function checks that the claimer has not already claimed, and that the campaign is not delegating, and then calls the internal claim function
   /// #if_succeeds "Can only claim in time window"
-  ///     let c := old(campaigns[campaignId]) in
-  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  ///     old(let c := campaigns[campaignId] in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end);
   /// #if_succeeds "Can't double claim." old(!claimed[campaignId][msg.sender]) && claimed[campaignId][msg.sender];
   /// #if_succeeds "Not a delegated camapign." old(!campaigns[campaignId].delegating);
   /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
@@ -271,9 +271,14 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param proofs is the proof of the leaf in the merkle tree
   /// @param claimAmounts is the amount of tokens to claim
   /// #if_succeeds "Can only claim in time window"
-  ///   forall(uint i in campaignIds)
+  ///   old(forall(uint i in campaignIds)
   ///     let c := campaigns[campaignIds[i]] in
-  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  ///       c.start <= block.timestamp && block.timestamp <= c.end);
+  /// #if_succeeds "Can't double claim."
+  ///   old(forall(uint i in campaignIds) !claimed[campaignIds[i]][msg.sender]) &&
+  ///   forall(uint i in campaignIds) claimed[campaignIds[i]][msg.sender];
+  /// #if_succeeds "Not a delegated camapign."
+  ///   old(forall(uint i in campaignIds) !campaigns[campaignIds[i]].delegating);
   /// Additional checks on balances performed by computeExpectedTransfers/checkExpectedTransfers.
   function claimMultiple(
     bytes16[] calldata campaignIds,
@@ -301,8 +306,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param claimAmount is the amount of tokens to claim
   /// @param claimSignature is the signature provided by the beneficial owner (the claimer) to the user of the function to claim on their behalf
   /// #if_succeeds "Can only claim in time window"
-  ///     let c := old(campaigns[campaignId]) in
-  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  ///     old(let c := campaigns[campaignId] in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end);
   /// #if_succeeds "Can't double claim." old(!claimed[campaignId][claimer]) && claimed[campaignId][claimer];
   /// #if_succeeds "Not a delegated camapign." old(!campaigns[campaignId].delegating);
   /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
@@ -354,10 +359,25 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
 
   /// add combination of claim with sig and claim multiple
   /// #if_succeeds "Can only claim in time window"
-  ///   forall(uint i in campaignIds)
+  ///   old(forall(uint i in campaignIds)
   ///     let c := campaigns[campaignIds[i]] in
-  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  ///       c.start <= block.timestamp && block.timestamp <= c.end);
+  /// #if_succeeds "Can't double claim."
+  ///   old(forall(uint i in campaignIds) !claimed[campaignIds[i]][claimer]) &&
+  ///   forall(uint i in campaignIds) claimed[campaignIds[i]][claimer];
+  /// #if_succeeds "Not a delegated camapign."
+  ///   old(forall(uint i in campaignIds) !campaigns[campaignIds[i]].delegating);
   /// #if_succeeds "Nonces increase monotonically; Nonce of claimer matches signature" nonces(claimer) == old(nonces(claimer)) + 1 && nonces(claimer) == claimSignature.nonce;
+  /// #if_succeeds "Signature is correct" ECDSA.recover(
+  ///    _hashTypedDataV4(
+  ///      keccak256(
+  ///        abi.encode(MULITCLAIM_TYPEHASH, campaignIds[0], claimer, claimAmounts[0], claimSignature.nonce, claimSignature.expiry)
+  ///      )
+  ///    ),
+  ///    claimSignature.v,
+  ///    claimSignature.r,
+  ///    claimSignature.s
+  ///  ) == claimer;
   function claimMultipleWithSig(
     bytes16[] calldata campaignIds,
     bytes32[][] calldata proofs,
@@ -408,8 +428,8 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param delegationSignature is a signature required Only if the user is claiming unlocked tokens, used to call the delegateWithSig function on the ERC20Votes token contract
   /// @dev the delegation signature is not require and empty entries can be passed in if the campaign is locked or vesting
   /// #if_succeeds "Can only claim in time window"
-  ///     let c := old(campaigns[campaignId]) in
-  ///       c.start <= block.timestamp && block.timestamp <= c.end;
+  ///     old(let c := campaigns[campaignId] in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end);
   /// #if_succeeds "Can't double claim." old(!claimed[campaignId][msg.sender]) && claimed[campaignId][msg.sender];
   /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
   ///   old(tok.balanceOf(address(this))) - claimAmount == tok.balanceOf(address(this));
@@ -462,9 +482,9 @@ contract DelegatedClaimCampaigns is ERC721Holder, ReentrancyGuard, EIP712, Nonce
   /// @param delegationSignature is a signature required Only if the user is claiming unlocked tokens, used to call the delegateWithSig function on the ERC20Votes token contract
   /// @dev the delegation signature is not require and empty entries can be passed in if the campaign is locked or vesting
   /// #if_succeeds "Can only claim in time window"
-  ///     let c := old(campaigns[campaignId]) in
-  ///       c.start <= block.timestamp && block.timestamp <= c.end;
-  /// #if_succeeds "Can't double claim." old(!claimed[campaignId][msg.sender]) && claimed[campaignId][msg.sender];
+  ///     old(let c := campaigns[campaignId] in
+  ///       c.start <= block.timestamp && block.timestamp <= c.end);
+  /// #if_succeeds "Can't double claim." old(!claimed[campaignId][claimer]) && claimed[campaignId][claimer];
   /// #if_succeeds "We send claimAmout of campaigns token." let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
   ///   old(tok.balanceOf(address(this))) - claimAmount == tok.balanceOf(address(this));
   /// #if_succeeds "Claimer gets the tokens on unlocked campaigns" let c := old(campaigns[campaignId]) in let tok := old(IERC20(c.token)) in
